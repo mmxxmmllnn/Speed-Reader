@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Speed Reader</title>
+  <style>
+    :root{
+      --bg:#f1ebdd; --fg:#1d1c1b; --accent:#fe7802;
+    }
+    html,body{height:100%;margin:0;font-family:system-ui,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--fg)}
+    .app{padding:18px;display:flex;flex-direction:column;gap:12px;align-items:center}
+    textarea{width:80%;height:110px;background:transparent;color:inherit;border:1px solid #dbdbdb;border-radius:8px;padding:10px}
+    .controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    input[type=range]{width:320px}
+    button{background:var(--accent);color:#ffffff;border:none;padding:8px 12px;border-radius:6px;cursor:pointer}
+    #reader{width:100%;height:220px;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden}
+    /* Anchor is invisible but used as reference point. Place it at 40% */
+    #anchor{position:absolute;left:50%;top:50%;width:0;height:0;pointer-events:none}
+    /* Small optional guide dot for debugging (comment out if you prefer invisible) */
+    #anchor::after{content:'';position:absolute;left:0;top:0;width:6px;height:6px;margin-left:-3px;margin-top:-3px;border-radius:50%;background:rgba(255,255,255,0.06)}
+    /* container that will hold the word wrapper */
+    #wordContainer{position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center}
+    /* wrapper for each word (we will translate this) */
+    .wordWrap{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);white-space:nowrap;will-change:transform}
+    .leftSpan{display:inline-block;text-align:right}
+    .orp{display:inline-block;color:var(--accent);text-align:center}
+    .rightSpan{display:inline-block;text-align:left}
+    /* basic footer / hints */
+    .muted{color:rgba(255,255,255,0.45);font-size:13px;margin-top:6px}
+  </style>
+    <!-- Favicon -->
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon.png">
+  <link rel="apple-touch-icon" href="favicon.png">
+</head>
+<body>
+  <div class="app">
+    <h2 style="margin:0">Speed Reader</h2>
+
+    <textarea id="paste" placeholder="Paste text here...">This is a quick example. Try different words: apple, diamond, synchronization.</textarea>
+
+    <div class="controls">
+      <label>WPM: <span id="wpmVal">400</span></label>
+      <input id="wpm" type="range" min="200" max="700" value="400" />
+
+      <label>Size: <span id="fontVal">48</span>px</label>
+      <input id="fontSize" type="range" min="20" max="100" value="48" />
+
+      <button id="start">Start</button>
+      <button id="pause">Stop</button>
+      <button id="reset">Reset</button>
+
+      <label><input id="smart" type="checkbox" checked> Smart speed</label>
+
+
+    </div>
+
+    <div id="reader" aria-live="polite">
+      <div id="anchor" aria-hidden="true"></div>
+      <div id="wordContainer" aria-hidden="false"></div>
+    </div>
+
+    <div class="muted">Local. Offline.</div>
+  </div>
+
+<script>
+  // Elements
+  const paste = document.getElementById('paste');
+  const startBtn = document.getElementById('start');
+  const pauseBtn = document.getElementById('pause');
+  const resetBtn = document.getElementById('reset');
+  const wpmInput = document.getElementById('wpm');
+  const wpmVal = document.getElementById('wpmVal');
+  const fontInput = document.getElementById('fontSize');
+  const fontVal = document.getElementById('fontVal');
+  const smartCheckbox = document.getElementById('smart');
+
+  const reader = document.getElementById('reader');
+  const anchor = document.getElementById('anchor');
+  const wordContainer = document.getElementById('wordContainer');
+
+  // State
+  let words = [];
+  let idx = 0;
+  let timer = null;
+  let playing = false;
+
+  // Helpers
+  function tokenize(text){
+    if(!text) return [];
+    return text.trim().split(/\s+/);
+  }
+  function baseDelay(){ return 60000 / Math.max(1, +wpmInput.value); }
+  function getDelay(word){
+    let d = baseDelay();
+    if(smartCheckbox.checked){
+      if(word.length > 7) d *= 1.22;
+      if(/[.,!?;:—()"]$/.test(word)) d *= 1.35;
+    }
+    return d;
+  }
+
+  // Build word HTML and append hidden then measure & shift
+  function renderAndAlign(word){
+    // cleanup old
+    wordContainer.innerHTML = '';
+    // create wrapper
+    const wrap = document.createElement('div');
+    wrap.className = 'wordWrap';
+    wrap.style.fontSize = fontInput.value + 'px';
+    // compute ORP index (left middle on even lengths)
+    const len = word.length;
+    if(len === 0){
+      wrap.textContent = '';
+      wordContainer.appendChild(wrap);
+      return;
+    }
+    const mid = (len % 2 === 0) ? (len/2 - 1) : Math.floor(len/2);
+    const left = word.slice(0, mid);
+    const center = word[mid];
+    const right = word.slice(mid + 1);
+
+    const leftSpan = document.createElement('span');
+    leftSpan.className = 'leftSpan';
+    leftSpan.textContent = left;
+
+    const orpSpan = document.createElement('span');
+    orpSpan.className = 'orp';
+    orpSpan.textContent = center;
+
+    const rightSpan = document.createElement('span');
+    rightSpan.className = 'rightSpan';
+    rightSpan.textContent = right;
+
+    // append into wrapper
+    wrap.appendChild(leftSpan);
+    wrap.appendChild(orpSpan);
+    wrap.appendChild(rightSpan);
+
+    // attach (invisible) then measure
+    // make it temporarily invisible but in DOM so we can measure positions
+    wrap.style.visibility = 'hidden';
+    wordContainer.appendChild(wrap);
+
+    // force layout then measure
+    // get bounding rects relative to viewport
+    const anchorRect = anchor.getBoundingClientRect();
+    const orpRect = orpSpan.getBoundingClientRect();
+    const wrapRect = wrap.getBoundingClientRect();
+
+    // compute center X of ORP and desired anchor X (anchor's center)
+    const orpCenterX = orpRect.left + (orpRect.width / 2);
+    const anchorCenterX = anchorRect.left; // anchor has width 0; its left is the center point at 40%
+
+    // compute how much we need to shift the wrapper (translateX)
+    // Because wrapper was inserted with left:50% and translate(-50%, -50%) (centered),
+    // we compute the delta in viewport pixels and apply translateX delta to move the wrapper by that px.
+    const deltaPx = anchorCenterX - orpCenterX;
+
+    // apply transformation: current transform already centers (-50%, -50%),
+    // so append translateX(deltaPx) in pixels
+    wrap.style.transform = `translate(calc(-50% + ${deltaPx}px), -50%)`;
+    wrap.style.visibility = 'visible';
+  }
+
+  function showWord(){
+    if(idx >= words.length){
+      // end
+      wordContainer.innerHTML = '';
+      const endWrap = document.createElement('div');
+      endWrap.className = 'wordWrap';
+      endWrap.style.fontSize = fontInput.value + 'px';
+      endWrap.style.transform = 'translate(-50%,-50%)';
+      endWrap.textContent = '— end —';
+      wordContainer.appendChild(endWrap);
+      playing = false;
+      return;
+    }
+    renderAndAlign(words[idx]);
+  }
+
+  function play(){
+    if(!words.length){
+      words = tokenize(paste.value);
+      idx = 0;
+    }
+    if(!words.length) return;
+    if(playing) return;
+    playing = true;
+    nextWord();
+  }
+
+  function nextWord(){
+    if(!playing) return;
+    showWord();
+    const current = words[idx] || '';
+    idx++;
+    const delay = getDelay(current);
+    timer = setTimeout(nextWord, delay);
+  }
+
+  function pause(){
+    playing = false;
+    clearTimeout(timer);
+  }
+
+  function reset(){
+    pause();
+    idx = 0;
+    wordContainer.innerHTML = '';
+    const ready = document.createElement('div');
+    ready.className = 'wordWrap';
+    ready.style.transform = 'translate(-50%,-50%)';
+    ready.style.fontSize = fontInput.value + 'px';
+    ready.textContent = 'Ready';
+    wordContainer.appendChild(ready);
+  }
+
+  // events
+  startBtn.addEventListener('click', ()=>{ play(); });
+  pauseBtn.addEventListener('click', ()=>{ pause(); });
+  resetBtn.addEventListener('click', ()=>{ reset(); });
+
+  wpmInput.addEventListener('input', ()=>{ wpmVal.textContent = wpmInput.value; });
+  fontInput.addEventListener('input', ()=>{ fontVal.textContent = fontInput.value; /* font size applied when rendering */ });
+
+  // keyboard: space play/pause; left/right prev/next (jump)
+  window.addEventListener('keydown', (e)=>{
+    if(e.code === 'Space'){ e.preventDefault(); playing ? pause() : play(); }
+    if(e.code === 'ArrowRight'){ pause(); if(idx < words.length) { idx++; showWord(); } }
+    if(e.code === 'ArrowLeft'){ pause(); if(idx>0){ idx--; showWord(); } }
+  });
+
+  // initial ready state
+  reset();
+
+  // Resize handling: if viewport changes, re-render current word to realign
+  let resizeTimer = null;
+  window.addEventListener('resize', ()=> {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(()=>{ if(!playing) showWord(); else { /* align current on next tick */ } }, 120);
+  });
+</script>
+</body>
+</html>
