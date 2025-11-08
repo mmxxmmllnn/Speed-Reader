@@ -1,6 +1,6 @@
 {
   "name": "Speed Reader",
-  "short_name": "Reader",
+  "short_name": "Speed Reader",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#f1ebdd",
@@ -19,3 +19,4 @@
     }
   ]
 }
+
