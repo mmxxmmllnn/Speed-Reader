@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#f1ebdd"> 
+
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Speed Reader</title>
   <style>
@@ -240,6 +243,9 @@
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(()=>{ if(!playing) showWord(); else { /* align current on next tick */ } }, 120);
   });
+  if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js');
+}
 </script>
 </body>
 </html>
