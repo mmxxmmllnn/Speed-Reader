@@ -1,4 +1,4 @@
-const CACHE = 'speedreader-v1';
+const CACHE = 'speedreader-v1.01';
 const ASSETS = [
 '/',
 '/index.html',
@@ -16,3 +16,4 @@ e.respondWith(caches.match(req).then(cached=> cached || fetch(req).then(resp=>{
 return caches.open(CACHE).then(cache=>{ cache.put(req, resp.clone()); return resp; });
 }).catch(()=>cached)));
 });
+
